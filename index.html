@@ -4,7 +4,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Email Confirmed - Log Vault</title>
+  <title>Vault Lock Account</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -21,7 +22,8 @@
 
 ```
 .card {
-  max-width: 480px;
+  width: 100%;
+  max-width: 500px;
   border: 1px solid #555555;
   border-radius: 18px;
   padding: 30px;
@@ -45,16 +47,214 @@ p {
   font-size: 13px;
   margin-top: 20px;
 }
+
+.hidden {
+  display: none;
+}
+
+input {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 12px;
+  padding: 13px;
+  border-radius: 12px;
+  border: 1px solid #555555;
+  background: #111111;
+  color: #ffffff;
+  font-size: 16px;
+}
+
+button {
+  width: 100%;
+  margin-top: 16px;
+  padding: 13px;
+  border: none;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #111111;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.status {
+  margin-top: 16px;
+  font-size: 14px;
+  color: #dddddd;
+  min-height: 20px;
+}
+
+.error {
+  color: #ff9b9b;
+}
+
+.success {
+  color: #a8ffbf;
+}
 ```
 
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>Email Confirmed</h1>
-    <p>Your Log Vault email has been confirmed.</p>
-    <p>You can close this window and return to the Log Vault app to continue.</p>
-    <p class="small">Log Vault does not store your vault entries, secure files, drawings, or private logs on this page.</p>
+    <div id="confirmedView">
+      <h1>Email Confirmed</h1>
+      <p>Your Vault Lock email has been confirmed.</p>
+      <p>You can close this window and return to the Log Vault app to continue.</p>
+      <p class="small">Vault Lock does not store your vault entries, secure files, drawings, or private logs on this page.</p>
+    </div>
+
+```
+<div id="resetView" class="hidden">
+  <h1>Create New Password</h1>
+  <p>Enter a new password for your Vault Lock account.</p>
+
+  <input id="newPassword" type="password" autocomplete="new-password" placeholder="New password">
+  <input id="confirmPassword" type="password" autocomplete="new-password" placeholder="Confirm new password">
+
+  <button id="updatePasswordButton" onclick="updatePassword()">Update Password</button>
+
+  <div id="resetStatus" class="status"></div>
+
+  <p class="small">After the password is updated, close this window and return to the Log Vault app to sign in.</p>
+</div>
+
+<div id="errorView" class="hidden">
+  <h1>Account Link Problem</h1>
+  <p id="errorText">This Vault Lock account link could not be completed.</p>
+  <p class="small">Return to Log Vault and request a new link.</p>
+</div>
+```
+
   </div>
+
+  <script>
+    const VAULT_LOCK_URL = "https://xnieikilkfuhtcrzknbx.supabase.co";
+    const VAULT_LOCK_KEY = "sb_publishable_1vqyTfMfF7NdjUbKtJV_sg_9C7t7XUv";
+
+    const vaultLock = supabase.createClient(VAULT_LOCK_URL, VAULT_LOCK_KEY, {
+      auth: {
+        detectSessionInUrl: false,
+        persistSession: false,
+        autoRefreshToken: false
+      }
+    });
+
+    const queryParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+
+    const queryMode = (queryParams.get("mode") || "").toLowerCase();
+    const queryType = (queryParams.get("type") || "").toLowerCase();
+    const hashType = (hashParams.get("type") || "").toLowerCase();
+
+    const recoveryRequested =
+      queryMode === "recovery" ||
+      queryType === "recovery" ||
+      hashType === "recovery";
+
+    const authError =
+      queryParams.get("error_description") ||
+      hashParams.get("error_description") ||
+      queryParams.get("error") ||
+      hashParams.get("error");
+
+    let recoverySessionReady = false;
+
+    function showOnly(viewId) {
+      document.getElementById("confirmedView").classList.add("hidden");
+      document.getElementById("resetView").classList.add("hidden");
+      document.getElementById("errorView").classList.add("hidden");
+      document.getElementById(viewId).classList.remove("hidden");
+    }
+
+    function showStatus(message, isError, isSuccess) {
+      const status = document.getElementById("resetStatus");
+      status.textContent = message;
+      status.classList.toggle("error", !!isError);
+      status.classList.toggle("success", !!isSuccess);
+    }
+
+    async function prepareRecoverySession() {
+      if (recoverySessionReady) return;
+
+      const code = queryParams.get("code") || hashParams.get("code");
+      const accessToken = queryParams.get("access_token") || hashParams.get("access_token");
+      const refreshToken = queryParams.get("refresh_token") || hashParams.get("refresh_token");
+
+      if (code) {
+        const result = await vaultLock.auth.exchangeCodeForSession(code);
+        if (result.error) throw result.error;
+        recoverySessionReady = true;
+        return;
+      }
+
+      if (accessToken && refreshToken) {
+        const result = await vaultLock.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken
+        });
+        if (result.error) throw result.error;
+        recoverySessionReady = true;
+        return;
+      }
+
+      throw new Error("This reset link is missing recovery information. Please return to Log Vault and request a new password reset email.");
+    }
+
+    async function updatePassword() {
+      const button = document.getElementById("updatePasswordButton");
+      const password = document.getElementById("newPassword").value;
+      const confirmPassword = document.getElementById("confirmPassword").value;
+
+      if (!password || password.length < 8) {
+        showStatus("Password must be at least 8 characters.", true, false);
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        showStatus("Passwords do not match.", true, false);
+        return;
+      }
+
+      button.disabled = true;
+      showStatus("Updating password...", false, false);
+
+      try {
+        await prepareRecoverySession();
+
+        const result = await vaultLock.auth.updateUser({
+          password: password
+        });
+
+        if (result.error) throw result.error;
+
+        await vaultLock.auth.signOut();
+
+        document.getElementById("newPassword").value = "";
+        document.getElementById("confirmPassword").value = "";
+
+        showStatus("Password updated. You can close this window and return to Log Vault to sign in.", false, true);
+      } catch (err) {
+        showStatus(err.message || "Password update failed. Please request a new reset link from Log Vault.", true, false);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    if (authError) {
+      document.getElementById("errorText").textContent = authError;
+      showOnly("errorView");
+    } else if (recoveryRequested) {
+      showOnly("resetView");
+    } else {
+      showOnly("confirmedView");
+    }
+  </script>
+
 </body>
 </html>
